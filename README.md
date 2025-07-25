@@ -1,6 +1,6 @@
 # CHAT
 
-A web chat application.
+A group chat application.
 
 The central server contains a hub and client components, where the client is a representation of a websocket connection. The hub acts as a central coordinator for all client events such as `register`, `unregister` and `broadcast`.
 
@@ -10,4 +10,5 @@ The central server contains a hub and client components, where the client is a r
 
 ## TODO
 
--   Add rooms support
+-   [ ] Add rooms support
+-   [ ] Persist messages

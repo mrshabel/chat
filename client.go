@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"log"
 	"net/http"
 	"time"
@@ -21,12 +20,6 @@ const (
 	maxMessageSize = 512
 )
 
-// message delimiters
-var (
-	newline = []byte{'\n'}
-	space   = []byte{' '}
-)
-
 // websocket connection upgrader
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -40,11 +33,17 @@ var upgrader = websocket.Upgrader{
 
 // Client holds the websocket connection and while connecting it  with the hub
 type Client struct {
+	// communication channel with central hub
 	hub  *Hub
 	conn *websocket.Conn
+	// channel to receive messages
+	inbox chan *Message
 
-	// outbound message channel
-	send chan []byte
+	// currently joined room
+	RoomID string
+	// client information
+	ID       string
+	Username string
 }
 
 // readPump sends message from the websocket connection to the hub
@@ -66,7 +65,7 @@ func (c *Client) readPump() {
 
 	// read messages from client
 	for {
-		_, message, err := c.conn.ReadMessage()
+		_, m, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("error: %v", err)
@@ -75,7 +74,13 @@ func (c *Client) readPump() {
 		}
 
 		// clean message and broadcast it
-		message = bytes.TrimSpace(bytes.Replace(message, newline, space, -1))
+		message := &Message{
+			Content:         string(m),
+			RoomID:          c.RoomID,
+			CreatorID:       c.ID,
+			CreatorUsername: c.Username,
+			CreatedAt:       time.Now().UTC(),
+		}
 		c.hub.broadcast <- message
 	}
 }
@@ -91,30 +96,15 @@ func (c *Client) writePump() {
 	for {
 		select {
 		// message received on client's channel
-		case message, ok := <-c.send:
+		case message, ok := <-c.inbox:
 			c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			// channel closed by hub so we close the connection
 			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				// c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
-			writer, err := c.conn.NextWriter(websocket.TextMessage)
-			if err != nil {
-				return
-			}
-			writer.Write(message)
-			// add queued message to the connect websocket message
-			n := len(c.send)
-			for range n {
-				writer.Write(newline)
-				writer.Write(<-c.send)
-			}
-
-			if err := writer.Close(); err != nil {
-				return
-			}
-
+			c.conn.WriteJSON(message)
 		case <-ticker.C:
 			// ping client
 			c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
@@ -126,7 +116,7 @@ func (c *Client) writePump() {
 }
 
 // serveWS handles the websocket requests from peer
-func serveWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
+func serveWS(hub *Hub, c *Client, w http.ResponseWriter, r *http.Request) {
 	// upgrade client http connection to websocket
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -134,7 +124,7 @@ func serveWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &Client{hub: hub, conn: conn, send: make(chan []byte, 256)}
+	client := &Client{hub: hub, conn: conn, inbox: make(chan *Message), RoomID: c.RoomID, ID: c.ID, Username: c.Username}
 	client.hub.register <- client
 
 	// handle connection reads and writes

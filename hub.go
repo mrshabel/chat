@@ -1,11 +1,33 @@
 package main
 
+import "time"
+
+// Message represents a websocket message
+type Message struct {
+	ID              string
+	RoomID          string
+	CreatorID       string
+	CreatorUsername string
+	Content         string
+	CreatedAt       time.Time
+}
+
+// Room holds all connected clients
+type Room struct {
+	// client id to connection mapping
+	Clients  map[string]*Client
+	ID       string
+	Name     string
+	Messages []*Message
+}
+
 // Hub holds the set of active clients and broadcasts messages to them
 type Hub struct {
-	clients map[*Client]struct{}
+	// room id to room mapping
+	Rooms map[string]*Room
 
 	// inbound messages from clients
-	broadcast chan []byte
+	broadcast chan *Message
 
 	// register/enter requests from client
 	register chan *Client
@@ -14,10 +36,10 @@ type Hub struct {
 	unregister chan *Client
 }
 
-func newHub() *Hub {
+func NewHub() *Hub {
 	return &Hub{
-		clients:    make(map[*Client]struct{}),
-		broadcast:  make(chan []byte),
+		Rooms:      make(map[string]*Room),
+		broadcast:  make(chan *Message),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 	}
@@ -28,22 +50,72 @@ func (h *Hub) run() {
 	for {
 		select {
 		case client := <-h.register:
-			h.clients[client] = struct{}{}
-			// broadcast message to all other clients in hub
+			// joined specified room and inform members
+			room := h.getRoom(client.RoomID)
+			if room == nil {
+				// create room if not present
+				room = &Room{
+					ID:       client.RoomID,
+					Name:     client.RoomID,
+					Messages: make([]*Message, 0),
+					Clients:  make(map[string]*Client),
+				}
+				h.Rooms[client.RoomID] = room
+			}
+			room.Clients[client.ID] = client
+
+			// replay messages history to client
+			go func() {
+				for _, message := range room.Messages {
+					client.inbox <- message
+				}
+			}()
+
+			// TODO: inform room members via notification event
+
 		case client := <-h.unregister:
-			delete(h.clients, client)
-			close(client.send)
-			// broadcast leave messages to clients
+			// remove client from room and close inbox channel
+			room := h.getRoom(client.RoomID)
+			if room == nil {
+				continue
+			}
+			delete(room.Clients, client.ID)
+			close(client.inbox)
+			// TODO: broadcast leave messages to clients
+
 		case message := <-h.broadcast:
-			for client := range h.clients {
+			// fanout messages to all connected clients
+			room := h.getRoom(message.RoomID)
+			if room == nil {
+				continue
+			}
+
+			room.Messages = append(room.Messages, message)
+
+			// TODO: persist message in the background
+
+			for _, client := range room.Clients {
+				if client.ID == message.CreatorID {
+					continue
+				}
+
 				select {
-				case client.send <- message:
+				case client.inbox <- message:
 				// close connection if channel is full
 				default:
-					close(client.send)
-					delete(h.clients, client)
+					close(client.inbox)
+					delete(room.Clients, client.ID)
 				}
 			}
 		}
 	}
+}
+
+// getRoom retrieves a room if present
+func (h *Hub) getRoom(id string) *Room {
+	room, ok := h.Rooms[id]
+	if !ok {
+		return nil
+	}
+	return room
 }
