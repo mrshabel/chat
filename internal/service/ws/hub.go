@@ -1,16 +1,6 @@
-package main
+package ws
 
-import "time"
-
-// Message represents a websocket message
-type Message struct {
-	ID              string
-	RoomID          string
-	CreatorID       string
-	CreatorUsername string
-	Content         string
-	CreatedAt       time.Time
-}
+import "github.com/mrshabel/chat/internal/model"
 
 // Room holds all connected clients
 type Room struct {
@@ -18,7 +8,7 @@ type Room struct {
 	Clients  map[string]*Client
 	ID       string
 	Name     string
-	Messages []*Message
+	Messages []*model.Message
 }
 
 // Hub holds the set of active clients and broadcasts messages to them
@@ -27,7 +17,7 @@ type Hub struct {
 	Rooms map[string]*Room
 
 	// inbound messages from clients
-	broadcast chan *Message
+	broadcast chan *model.Message
 
 	// register/enter requests from client
 	register chan *Client
@@ -39,25 +29,25 @@ type Hub struct {
 func NewHub() *Hub {
 	return &Hub{
 		Rooms:      make(map[string]*Room),
-		broadcast:  make(chan *Message),
+		broadcast:  make(chan *model.Message),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 	}
 }
 
 // run starts the hub and handles all related events
-func (h *Hub) run() {
+func (h *Hub) Run() {
 	for {
 		select {
 		case client := <-h.register:
 			// joined specified room and inform members
-			room := h.getRoom(client.RoomID)
+			room := h.GetRoom(client.RoomID)
 			if room == nil {
 				// create room if not present
 				room = &Room{
 					ID:       client.RoomID,
 					Name:     client.RoomID,
-					Messages: make([]*Message, 0),
+					Messages: make([]*model.Message, 0),
 					Clients:  make(map[string]*Client),
 				}
 				h.Rooms[client.RoomID] = room
@@ -75,7 +65,7 @@ func (h *Hub) run() {
 
 		case client := <-h.unregister:
 			// remove client from room and close inbox channel
-			room := h.getRoom(client.RoomID)
+			room := h.GetRoom(client.RoomID)
 			if room == nil {
 				continue
 			}
@@ -85,7 +75,7 @@ func (h *Hub) run() {
 
 		case message := <-h.broadcast:
 			// fanout messages to all connected clients
-			room := h.getRoom(message.RoomID)
+			room := h.GetRoom(message.RoomID)
 			if room == nil {
 				continue
 			}
@@ -111,8 +101,8 @@ func (h *Hub) run() {
 	}
 }
 
-// getRoom retrieves a room if present
-func (h *Hub) getRoom(id string) *Room {
+// GetRoom retrieves a room if present
+func (h *Hub) GetRoom(id string) *Room {
 	room, ok := h.Rooms[id]
 	if !ok {
 		return nil

@@ -1,4 +1,4 @@
-package main
+package ws
 
 import (
 	"log"
@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mrshabel/chat/internal/model"
 )
 
 const (
@@ -37,7 +38,7 @@ type Client struct {
 	hub  *Hub
 	conn *websocket.Conn
 	// channel to receive messages
-	inbox chan *Message
+	inbox chan *model.Message
 
 	// currently joined room
 	RoomID string
@@ -74,7 +75,7 @@ func (c *Client) readPump() {
 		}
 
 		// clean message and broadcast it
-		message := &Message{
+		message := &model.Message{
 			Content:         string(m),
 			RoomID:          c.RoomID,
 			CreatorID:       c.ID,
@@ -115,8 +116,8 @@ func (c *Client) writePump() {
 	}
 }
 
-// serveWS handles the websocket requests from peer
-func serveWS(hub *Hub, c *Client, w http.ResponseWriter, r *http.Request) {
+// ServeWS handles the websocket requests from peer
+func ServeWS(hub *Hub, c *Client, w http.ResponseWriter, r *http.Request) {
 	// upgrade client http connection to websocket
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -124,7 +125,14 @@ func serveWS(hub *Hub, c *Client, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &Client{hub: hub, conn: conn, inbox: make(chan *Message), RoomID: c.RoomID, ID: c.ID, Username: c.Username}
+	client := &Client{
+		hub:      hub,
+		conn:     conn,
+		inbox:    make(chan *model.Message),
+		RoomID:   c.RoomID,
+		ID:       c.ID,
+		Username: c.Username,
+	}
 	client.hub.register <- client
 
 	// handle connection reads and writes
