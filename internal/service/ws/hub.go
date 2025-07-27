@@ -1,12 +1,18 @@
 package ws
 
-import "github.com/mrshabel/chat/internal/model"
+import (
+	"context"
+
+	"github.com/google/uuid"
+	"github.com/mrshabel/chat/internal/model"
+	"github.com/mrshabel/chat/internal/service"
+)
 
 // Room holds all connected clients
 type Room struct {
 	// client id to connection mapping
 	Clients  map[string]*Client
-	ID       string
+	ID       uuid.UUID
 	Name     string
 	Messages []*model.Message
 }
@@ -24,14 +30,17 @@ type Hub struct {
 
 	// unregister/leave request from client
 	unregister chan *Client
+
+	roomService *service.RoomService
 }
 
-func NewHub() *Hub {
+func NewHub(roomService *service.RoomService) *Hub {
 	return &Hub{
-		Rooms:      make(map[string]*Room),
-		broadcast:  make(chan *model.Message),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
+		Rooms:       make(map[string]*Room),
+		broadcast:   make(chan *model.Message),
+		register:    make(chan *Client),
+		unregister:  make(chan *Client),
+		roomService: roomService,
 	}
 }
 
@@ -43,16 +52,21 @@ func (h *Hub) Run() {
 			// joined specified room and inform members
 			room := h.GetRoom(client.RoomID)
 			if room == nil {
-				// create room if not present
+				// get room from db
+				dbRoom, err := h.roomService.GetByID(context.Background(), client.RoomID)
+				if err != nil {
+					continue
+				}
+
 				room = &Room{
-					ID:       client.RoomID,
-					Name:     client.RoomID,
+					ID:       dbRoom.ID,
+					Name:     dbRoom.Name,
 					Messages: make([]*model.Message, 0),
 					Clients:  make(map[string]*Client),
 				}
-				h.Rooms[client.RoomID] = room
+				h.Rooms[client.RoomID.String()] = room
 			}
-			room.Clients[client.ID] = client
+			room.Clients[client.ID.String()] = client
 
 			// replay messages history to client
 			go func() {
@@ -69,7 +83,7 @@ func (h *Hub) Run() {
 			if room == nil {
 				continue
 			}
-			delete(room.Clients, client.ID)
+			delete(room.Clients, client.ID.String())
 			close(client.inbox)
 			// TODO: broadcast leave messages to clients
 
@@ -85,7 +99,7 @@ func (h *Hub) Run() {
 			// TODO: persist message in the background
 
 			for _, client := range room.Clients {
-				if client.ID == message.CreatorID {
+				if client.ID == message.SenderID {
 					continue
 				}
 
@@ -94,7 +108,7 @@ func (h *Hub) Run() {
 				// close connection if channel is full
 				default:
 					close(client.inbox)
-					delete(room.Clients, client.ID)
+					delete(room.Clients, client.ID.String())
 				}
 			}
 		}
@@ -102,8 +116,9 @@ func (h *Hub) Run() {
 }
 
 // GetRoom retrieves a room if present
-func (h *Hub) GetRoom(id string) *Room {
-	room, ok := h.Rooms[id]
+func (h *Hub) GetRoom(id uuid.UUID) *Room {
+
+	room, ok := h.Rooms[id.String()]
 	if !ok {
 		return nil
 	}

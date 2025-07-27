@@ -10,8 +10,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+	"github.com/mrshabel/chat/internal/config"
+	"github.com/mrshabel/chat/internal/database"
 	"github.com/mrshabel/chat/internal/handler"
+	"github.com/mrshabel/chat/internal/repository"
 	"github.com/mrshabel/chat/internal/router"
+	"github.com/mrshabel/chat/internal/service"
 	"github.com/mrshabel/chat/internal/service/ws"
 )
 
@@ -19,16 +24,39 @@ var addr = flag.String("addr", "127.0.0.1:8000", "HTTP service address")
 
 func main() {
 	flag.Parse()
+	godotenv.Load()
+
+	// load configs
+	cfg, err := config.New()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// initialize db
+	db, err := database.New(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// initialize repositories, services
+	userRepo := repository.NewUserRepository(db.DB)
+	roomRepo := repository.NewRoomRepository(db.DB)
+	// messageRepo := repository.NewMessageRepository(db.DB)
+
+	userService := service.NewUserService(userRepo)
+	roomService := service.NewRoomService(roomRepo)
 
 	// start ws hub
-	hub := ws.NewHub()
+	hub := ws.NewHub(roomService)
 	go hub.Run()
 
 	// create handlers
-	roomHandler := handler.NewRoomHandler(hub)
+
+	roomHandler := handler.NewRoomHandler(hub, roomService, userService)
+	userHandler := handler.NewUserHandler(userService)
 
 	// register all routes
-	r := router.RegisterRoutes(roomHandler)
+	r := router.RegisterRoutes(roomHandler, userHandler)
 
 	// http server
 	server := &http.Server{

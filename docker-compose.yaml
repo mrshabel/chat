@@ -1,0 +1,27 @@
+services:
+    db:
+        image: postgres:latest
+        container_name: chat-db
+        environment:
+            POSTGRES_DB: ${DB_DATABASE}
+            POSTGRES_USER: ${DB_USERNAME}
+            POSTGRES_PASSWORD: ${DB_PASSWORD}
+        ports:
+            - ${DB_PORT}:5432
+        volumes:
+            - ./.postgres-data:/var/lib/postgresql/data
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "sh -c 'pg_isready -U ${DB_USERNAME} -d ${DB_DATABASE}'",
+                ]
+            interval: 5s
+            timeout: 5s
+            retries: 3
+            start_period: 15s
+        networks:
+            - chat
+
+networks:
+    chat:

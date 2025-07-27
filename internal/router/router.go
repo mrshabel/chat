@@ -9,7 +9,7 @@ import (
 )
 
 // register all the handlers with their appropriate routes
-func RegisterRoutes(roomHandler *handler.RoomHandler) http.Handler {
+func RegisterRoutes(roomHandler *handler.RoomHandler, userHandler *handler.UserHandler) http.Handler {
 	router := mux.NewRouter()
 
 	// health check
@@ -20,11 +20,19 @@ func RegisterRoutes(roomHandler *handler.RoomHandler) http.Handler {
 
 	api := router.PathPrefix("/api").Subrouter()
 
+	// users
+	users := api.PathPrefix("/users").Subrouter()
+	users.HandleFunc("", userHandler.CreateUser).Methods(http.MethodPost)
+	users.HandleFunc("/{id}", userHandler.GetByUserByID).Methods(http.MethodGet)
+
 	// rooms
 	rooms := api.PathPrefix("/rooms").Subrouter()
 	rooms.HandleFunc("", roomHandler.CreateRoom).Methods(http.MethodPost)
-	rooms.HandleFunc("", roomHandler.GetRooms).Methods(http.MethodGet)
-	rooms.HandleFunc("/{id}/active", roomHandler.GetActiveRoomMembers).Methods(http.MethodGet)
+	rooms.HandleFunc("", roomHandler.GetAllRooms).Methods(http.MethodGet)
+	rooms.HandleFunc("/{id}", roomHandler.GetRoomByID).Methods(http.MethodGet)
+	rooms.HandleFunc("/{id}/members", roomHandler.AddMember).Methods(http.MethodPost)
+	rooms.HandleFunc("/{id}/members", roomHandler.GetMembers).Methods(http.MethodGet)
+	rooms.HandleFunc("/{id}/members/active", roomHandler.GetActiveRoomMembers).Methods(http.MethodGet)
 
 	// finally apply cors middleware on the router. this should be the last action performed on the router instance
 	return setupCors(router)

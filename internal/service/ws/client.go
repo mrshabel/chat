@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/mrshabel/chat/internal/model"
 )
@@ -41,9 +42,9 @@ type Client struct {
 	inbox chan *model.Message
 
 	// currently joined room
-	RoomID string
+	RoomID uuid.UUID
 	// client information
-	ID       string
+	ID       uuid.UUID
 	Username string
 }
 
@@ -76,11 +77,11 @@ func (c *Client) readPump() {
 
 		// clean message and broadcast it
 		message := &model.Message{
-			Content:         string(m),
-			RoomID:          c.RoomID,
-			CreatorID:       c.ID,
-			CreatorUsername: c.Username,
-			CreatedAt:       time.Now().UTC(),
+			Content:        string(m),
+			RoomID:         c.RoomID,
+			SenderID:       c.ID,
+			SenderUsername: c.Username,
+			CreatedAt:      time.Now().UTC(),
 		}
 		c.hub.broadcast <- message
 	}
