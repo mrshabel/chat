@@ -13,16 +13,18 @@ import (
 )
 
 type RoomHandler struct {
-	Hub         *ws.Hub
-	service     *service.RoomService
-	userService *service.UserService
+	Hub            *ws.Hub
+	service        *service.RoomService
+	userService    *service.UserService
+	messageService *service.MessageService
 }
 
-func NewRoomHandler(hub *ws.Hub, service *service.RoomService, userService *service.UserService) *RoomHandler {
+func NewRoomHandler(hub *ws.Hub, service *service.RoomService, userService *service.UserService, messageService *service.MessageService) *RoomHandler {
 	return &RoomHandler{
-		Hub:         hub,
-		service:     service,
-		userService: userService,
+		Hub:            hub,
+		service:        service,
+		userService:    userService,
+		messageService: messageService,
 	}
 }
 
@@ -50,7 +52,7 @@ func (h *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// verify that room exists. the in-memory room will be created only when it exists in the db
-	_, err = h.service.GetByID(r.Context(), roomID)
+	room, err := h.service.GetByID(r.Context(), roomID)
 	if err != nil {
 		if errors.Is(err, service.ErrRoomNotFound) {
 			util.WriteError(w, "Room not found", http.StatusNotFound)
@@ -59,14 +61,37 @@ func (h *RoomHandler) JoinRoom(w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, "Failed to join room", http.StatusInternalServerError)
 		return
 	}
-
-	client := &ws.Client{
-		ID:       userID,
-		RoomID:   roomID,
-		Username: user.Username,
+	if inMemRoom := h.Hub.GetRoom(roomID); inMemRoom == nil {
+		h.Hub.Rooms[roomID.String()] = &ws.Room{
+			Clients:  make(map[string]*ws.Client),
+			ID:       roomID,
+			Name:     room.Name,
+			Messages: make([]*model.Message, 0, ws.MaxMessageLimit),
+		}
 	}
 
-	ws.ServeWS(h.Hub, client, w, r)
+	// upgrade client http connection to websocket
+	conn, err := ws.Upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("failed to upgrade connection %v\n", err)
+		util.WriteError(w, "Failed to join room", http.StatusInternalServerError)
+		return
+	}
+
+	// register client
+	client := &ws.Client{
+		ID:       user.ID,
+		RoomID:   roomID,
+		Username: user.Username,
+		Hub:      h.Hub,
+		Conn:     conn,
+		Inbox:    make(chan *model.Message),
+	}
+	client.Hub.Register <- client
+
+	// handle connection reads and writes
+	go client.WritePump()
+	client.ReadPump()
 }
 
 func (h *RoomHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
@@ -187,4 +212,22 @@ func (h *RoomHandler) GetActiveRoomMembers(w http.ResponseWriter, r *http.Reques
 	}
 
 	util.WriteJSON(w, users, 200)
+}
+
+// GetAllRoomMessages retrieves the most recent messages in the given room
+func (h *RoomHandler) GetAllRoomMessages(w http.ResponseWriter, r *http.Request) {
+	roomID, err := util.GetParamUUID(r, "id")
+	if err != nil {
+		util.WriteError(w, "Invalid room ID", http.StatusBadRequest)
+		return
+	}
+	skip, limit := util.GetPaginationQuery(r, 1, 50)
+
+	messages, err := h.messageService.GetByRoomID(r.Context(), roomID, limit, skip)
+	if err != nil {
+		util.WriteError(w, "Failed to retrieve room messages", http.StatusInternalServerError)
+		return
+	}
+
+	util.WriteJSON(w, messages, http.StatusOK)
 }

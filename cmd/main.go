@@ -41,18 +41,19 @@ func main() {
 	// initialize repositories, services
 	userRepo := repository.NewUserRepository(db.DB)
 	roomRepo := repository.NewRoomRepository(db.DB)
-	// messageRepo := repository.NewMessageRepository(db.DB)
+	messageRepo := repository.NewMessageRepository(db.DB)
 
 	userService := service.NewUserService(userRepo)
 	roomService := service.NewRoomService(roomRepo)
+	messageService := service.NewMessageService(messageRepo)
 
 	// start ws hub
-	hub := ws.NewHub(roomService)
+	hub := ws.NewHub(roomService, messageService)
 	go hub.Run()
 
 	// create handlers
 
-	roomHandler := handler.NewRoomHandler(hub, roomService, userService)
+	roomHandler := handler.NewRoomHandler(hub, roomService, userService, messageService)
 	userHandler := handler.NewUserHandler(userService)
 
 	// register all routes

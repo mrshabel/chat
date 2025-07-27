@@ -33,6 +33,7 @@ func RegisterRoutes(roomHandler *handler.RoomHandler, userHandler *handler.UserH
 	rooms.HandleFunc("/{id}/members", roomHandler.AddMember).Methods(http.MethodPost)
 	rooms.HandleFunc("/{id}/members", roomHandler.GetMembers).Methods(http.MethodGet)
 	rooms.HandleFunc("/{id}/members/active", roomHandler.GetActiveRoomMembers).Methods(http.MethodGet)
+	rooms.HandleFunc("/{id}/messages", roomHandler.GetAllRoomMessages).Methods(http.MethodGet)
 
 	// finally apply cors middleware on the router. this should be the last action performed on the router instance
 	return setupCors(router)

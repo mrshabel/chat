@@ -16,24 +16,27 @@ func NewMessageRepository(db *sql.DB) *MessageRepository {
 	return &MessageRepository{db: db}
 }
 
-func (r *MessageRepository) Create(ctx context.Context, msg *model.Message) error {
+func (r *MessageRepository) Create(ctx context.Context, data *model.Message) (*model.Message, error) {
 	query := `
-        INSERT INTO messages (id, room_id, sender_id, sender_username, content, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO messages (room_id, sender_id, sender_username, content)
+        VALUES ($1, $2, $3, $4)
+		RETURNING id, room_id, sender_id, sender_username, content, created_at, updated_at
     `
-	_, err := r.db.ExecContext(ctx, query,
-		msg.ID,
-		msg.RoomID,
-		msg.SenderID,
-		msg.SenderUsername,
-		msg.Content,
-		msg.CreatedAt,
-		msg.UpdatedAt,
-	)
-	return err
+	var message model.Message
+	if err := r.db.QueryRowContext(ctx, query, data.RoomID, data.SenderID, data.SenderUsername, data.Content).Scan(
+		&message.ID,
+		&message.RoomID,
+		&message.SenderID,
+		&message.SenderUsername,
+		&message.Content,
+		&message.CreatedAt,
+		&message.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &message, nil
 }
 
-func (r *MessageRepository) GetByRoomID(ctx context.Context, roomID string, limit, offset int) ([]*model.Message, error) {
+func (r *MessageRepository) GetByRoomID(ctx context.Context, roomID uuid.UUID, limit, offset int) ([]*model.Message, error) {
 	query := `
         SELECT id, room_id, sender_id, sender_username, content, created_at, updated_at
         FROM messages 

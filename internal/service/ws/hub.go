@@ -2,10 +2,15 @@ package ws
 
 import (
 	"context"
+	"log"
 
 	"github.com/google/uuid"
 	"github.com/mrshabel/chat/internal/model"
 	"github.com/mrshabel/chat/internal/service"
+)
+
+const (
+	MaxMessageLimit = 20
 )
 
 // Room holds all connected clients
@@ -23,24 +28,26 @@ type Hub struct {
 	Rooms map[string]*Room
 
 	// inbound messages from clients
-	broadcast chan *model.Message
+	Broadcast chan *model.Message
 
 	// register/enter requests from client
-	register chan *Client
+	Register chan *Client
 
 	// unregister/leave request from client
-	unregister chan *Client
+	Unregister chan *Client
 
-	roomService *service.RoomService
+	roomService    *service.RoomService
+	messageService *service.MessageService
 }
 
-func NewHub(roomService *service.RoomService) *Hub {
+func NewHub(roomService *service.RoomService, messageService *service.MessageService) *Hub {
 	return &Hub{
-		Rooms:       make(map[string]*Room),
-		broadcast:   make(chan *model.Message),
-		register:    make(chan *Client),
-		unregister:  make(chan *Client),
-		roomService: roomService,
+		Rooms:          make(map[string]*Room),
+		Broadcast:      make(chan *model.Message),
+		Register:       make(chan *Client),
+		Unregister:     make(chan *Client),
+		roomService:    roomService,
+		messageService: messageService,
 	}
 }
 
@@ -48,66 +55,64 @@ func NewHub(roomService *service.RoomService) *Hub {
 func (h *Hub) Run() {
 	for {
 		select {
-		case client := <-h.register:
+		case client := <-h.Register:
 			// joined specified room and inform members
 			room := h.GetRoom(client.RoomID)
 			if room == nil {
-				// get room from db
-				dbRoom, err := h.roomService.GetByID(context.Background(), client.RoomID)
-				if err != nil {
-					continue
-				}
-
-				room = &Room{
-					ID:       dbRoom.ID,
-					Name:     dbRoom.Name,
-					Messages: make([]*model.Message, 0),
-					Clients:  make(map[string]*Client),
-				}
-				h.Rooms[client.RoomID.String()] = room
+				continue
 			}
 			room.Clients[client.ID.String()] = client
+
+			// load recent messages from db and replay to client
+			messages, err := h.messageService.GetByRoomID(context.Background(), room.ID, MaxMessageLimit, 0)
+			if err != nil {
+				log.Printf("failed to load recent messages for room (%s) from db\n", client.RoomID)
+			} else {
+				room.Messages = messages
+			}
 
 			// replay messages history to client
 			go func() {
 				for _, message := range room.Messages {
-					client.inbox <- message
+					client.Inbox <- message
 				}
 			}()
 
-			// TODO: inform room members via notification event
-
-		case client := <-h.unregister:
+		case client := <-h.Unregister:
 			// remove client from room and close inbox channel
 			room := h.GetRoom(client.RoomID)
 			if room == nil {
 				continue
 			}
 			delete(room.Clients, client.ID.String())
-			close(client.inbox)
-			// TODO: broadcast leave messages to clients
+			close(client.Inbox)
 
-		case message := <-h.broadcast:
+		case message := <-h.Broadcast:
 			// fanout messages to all connected clients
 			room := h.GetRoom(message.RoomID)
 			if room == nil {
 				continue
 			}
 
-			room.Messages = append(room.Messages, message)
-
-			// TODO: persist message in the background
+			// persist message in the background and update inmem messages
+			go func() {
+				message, err := h.messageService.Create(context.Background(), message)
+				if err != nil {
+					log.Printf("failed to persist client message: %v\n", err)
+					return
+				}
+				room.Messages = append(room.Messages, message)
+			}()
 
 			for _, client := range room.Clients {
 				if client.ID == message.SenderID {
 					continue
 				}
-
 				select {
-				case client.inbox <- message:
-				// close connection if channel is full
+				case client.Inbox <- message:
+				// close connection if inbox channel is full
 				default:
-					close(client.inbox)
+					close(client.Inbox)
 					delete(room.Clients, client.ID.String())
 				}
 			}

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/mrshabel/chat/internal/model"
+	"github.com/mrshabel/chat/internal/util"
 )
 
 const (
@@ -22,8 +23,8 @@ const (
 	maxMessageSize = 512
 )
 
-// websocket connection upgrader
-var upgrader = websocket.Upgrader{
+// websocket connection
+var Upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
@@ -36,10 +37,10 @@ var upgrader = websocket.Upgrader{
 // Client holds the websocket connection and while connecting it  with the hub
 type Client struct {
 	// communication channel with central hub
-	hub  *Hub
-	conn *websocket.Conn
+	Hub  *Hub
+	Conn *websocket.Conn
 	// channel to receive messages
-	inbox chan *model.Message
+	Inbox chan *model.Message
 
 	// currently joined room
 	RoomID uuid.UUID
@@ -48,26 +49,26 @@ type Client struct {
 	Username string
 }
 
-// readPump sends message from the websocket connection to the hub
-func (c *Client) readPump() {
+// ReadPump sends message from the websocket connection to the hub
+func (c *Client) ReadPump() {
 	defer func() {
 		// unregister the client and close the websocket connection
-		c.hub.unregister <- c
-		c.conn.Close()
+		c.Hub.Unregister <- c
+		c.Conn.Close()
 	}()
 
 	// set message and timeout defaults
-	c.conn.SetReadLimit(maxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(pongTimeout))
+	c.Conn.SetReadLimit(maxMessageSize)
+	c.Conn.SetReadDeadline(time.Now().Add(pongTimeout))
 	// pong handler (client heartbeat response)
-	c.conn.SetPongHandler(func(appData string) error {
-		c.conn.SetReadDeadline(time.Now().Add(pongTimeout))
+	c.Conn.SetPongHandler(func(appData string) error {
+		c.Conn.SetReadDeadline(time.Now().Add(pongTimeout))
 		return nil
 	})
 
 	// read messages from client
 	for {
-		_, m, err := c.conn.ReadMessage()
+		_, msg, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("error: %v", err)
@@ -77,40 +78,39 @@ func (c *Client) readPump() {
 
 		// clean message and broadcast it
 		message := &model.Message{
-			Content:        string(m),
+			Content:        util.SanitizeWSMessage(msg),
 			RoomID:         c.RoomID,
 			SenderID:       c.ID,
 			SenderUsername: c.Username,
-			CreatedAt:      time.Now().UTC(),
 		}
-		c.hub.broadcast <- message
+		c.Hub.Broadcast <- message
 	}
 }
 
-// writePump sends messages from the hub to the current websocket connection
-func (c *Client) writePump() {
+// WritePump sends messages from the hub to the current websocket connection
+func (c *Client) WritePump() {
 	ticker := time.NewTicker(pingInterval)
 	defer func() {
 		ticker.Stop()
-		c.conn.Close()
+		c.Conn.Close()
 	}()
 
 	for {
 		select {
 		// message received on client's channel
-		case message, ok := <-c.inbox:
-			c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+		case message, ok := <-c.Inbox:
+			c.Conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			// channel closed by hub so we close the connection
 			if !ok {
-				// c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				// c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
-			c.conn.WriteJSON(message)
+			c.Conn.WriteJSON(message)
 		case <-ticker.C:
 			// ping client
-			c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			c.Conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
 		}
@@ -120,23 +120,23 @@ func (c *Client) writePump() {
 // ServeWS handles the websocket requests from peer
 func ServeWS(hub *Hub, c *Client, w http.ResponseWriter, r *http.Request) {
 	// upgrade client http connection to websocket
-	conn, err := upgrader.Upgrade(w, r, nil)
+	Conn, err := Upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("failed to upgrade connection %v\n", err)
 		return
 	}
 
 	client := &Client{
-		hub:      hub,
-		conn:     conn,
-		inbox:    make(chan *model.Message),
+		Hub:      hub,
+		Conn:     Conn,
+		Inbox:    make(chan *model.Message),
 		RoomID:   c.RoomID,
 		ID:       c.ID,
 		Username: c.Username,
 	}
-	client.hub.register <- client
+	client.Hub.Register <- client
 
 	// handle connection reads and writes
-	go client.writePump()
-	go client.readPump()
+	go client.WritePump()
+	go client.ReadPump()
 }
